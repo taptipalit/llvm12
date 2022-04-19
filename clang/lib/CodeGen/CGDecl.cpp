@@ -183,6 +183,66 @@ void CodeGenFunction::EmitVarDecl(const VarDecl &D) {
     // Don't emit it now, allow it to be emitted lazily on its first use.
     return;
 
+  const Type* sizeOfType = nullptr;
+  int multiplier = 1;
+
+  if (D.getInit()) {
+      // Check if the declaration has a sizeof(..)
+      // or a N*sizeof(..)
+      //
+      // Note: In case of multiplicative values, we only store the struct name
+      // We do *NOT* store the multiplier count. Later stages should derive
+      // the multiplier by previous and new Val--
+      // Oldsz * N = OldVal, where Oldsz and OldVal are known
+      const Expr* initExpr = D.getInit()->IgnoreCasts();
+      if (const UnaryExprOrTypeTraitExpr* uExpr =
+              dyn_cast<UnaryExprOrTypeTraitExpr>(initExpr)) {
+          if (uExpr->getKind() == UETT_SizeOf) {
+              QualType TypeToSize = uExpr->getTypeOfArgument();
+              sizeOfType = TypeToSize.getTypePtr();
+          }
+      } else if (const BinaryOperator* BinOp = dyn_cast<BinaryOperator>(initExpr)) {
+          const Expr* LHS = BinOp->getLHS()->IgnoreCasts();
+          const Expr* RHS = BinOp->getRHS()->IgnoreCasts();
+          if (const UnaryExprOrTypeTraitExpr* uExpr =
+                  dyn_cast<UnaryExprOrTypeTraitExpr>(LHS)) {
+              if (const IntegerLiteral* RHSIL = dyn_cast<IntegerLiteral>(RHS)) {
+                  if (uExpr->getKind() == UETT_SizeOf) {
+                      QualType TypeToSize = uExpr->getTypeOfArgument();
+                      sizeOfType = TypeToSize.getTypePtr();
+                      multiplier = RHSIL->getValue().getLimitedValue();
+                  }
+              }
+          }
+          if (const UnaryExprOrTypeTraitExpr* uExpr =
+                  dyn_cast<UnaryExprOrTypeTraitExpr>(RHS)) {
+              if (const IntegerLiteral* LHSIL = dyn_cast<IntegerLiteral>(LHS)) {
+                  if (uExpr->getKind() == UETT_SizeOf) {
+                      QualType TypeToSize = uExpr->getTypeOfArgument();
+                      sizeOfType = TypeToSize.getTypePtr();
+                      multiplier = LHSIL->getValue().getLimitedValue();
+                  }
+              }
+          }
+          /*
+          if (const UnaryExprOrTypeTraitExpr* uExpr =
+                  dyn_cast<UnaryExprOrTypeTraitExpr>(LHS)) {
+              if (uExpr->getKind() == UETT_SizeOf) {
+                  QualType TypeToSize = uExpr->getTypeOfArgument();
+                  sizeOfType = TypeToSize.getTypePtr();
+              }
+          }
+          if (const UnaryExprOrTypeTraitExpr* uExpr =
+                  dyn_cast<UnaryExprOrTypeTraitExpr>(RHS)) {
+              if (uExpr->getKind() == UETT_SizeOf) {
+                  QualType TypeToSize = uExpr->getTypeOfArgument();
+                  sizeOfType = TypeToSize.getTypePtr();
+              }
+          }
+          */
+      }
+  }
+
   // Some function-scope variable does not have static storage but still
   // needs to be emitted like a static variable, e.g. a function-scope
   // variable in constant address space in OpenCL.
@@ -198,14 +258,71 @@ void CodeGenFunction::EmitVarDecl(const VarDecl &D) {
     // some variables even if we can constant-evaluate them because
     // we can't guarantee every translation unit will constant-evaluate them.
 
-    return EmitStaticVarDecl(D, Linkage);
+    EmitStaticVarDecl(D, Linkage);
+
+    if (sizeOfType) {
+        // Find the last inserted instruction
+        auto it = Builder.GetInsertPoint();
+        // go one back
+        it--;
+        llvm::Instruction* I = &*it;
+
+        if (I) {
+            llvm::LLVMContext& ctx = I->getContext();
+            if (sizeOfType->isStructureType()) {
+                const RecordType* sizeOfStructType = sizeOfType->getAsStructureType();
+                RecordDecl* decl = sizeOfStructType->getDecl();
+                if (!decl->getDeclName().isEmpty() || decl->getTypedefNameForAnonDecl()) {
+                    llvm::MDNode* N = llvm::MDNode::get(ctx, llvm::MDString::get(ctx,
+                                (decl->getTypedefNameForAnonDecl()? decl->getTypedefNameForAnonDecl()->getName().str() : decl->getNameAsString())
+                                ));
+                    I->setMetadata("sizeOfTypeName", N);
+                    llvm::MDNode* P = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, std::to_string(multiplier)));
+                    I->setMetadata("sizeOfMulFactor", P);
+                }
+            } else {
+                llvm::MDNode* N = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, "scalar_type"));
+                I->setMetadata("sizeOfTypeName", N);
+                llvm::MDNode* P = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, std::to_string(multiplier)));
+                I->setMetadata("sizeOfMulFactor", P);
+            }
+        }
+    }
+
+	return;
   }
 
   if (D.getType().getAddressSpace() == LangAS::opencl_local)
     return CGM.getOpenCLRuntime().EmitWorkGroupLocalVarDecl(*this, D);
 
   assert(D.hasLocalStorage());
-  return EmitAutoVarDecl(D);
+  EmitAutoVarDecl(D);
+  if (sizeOfType) {
+      // Find the last inserted instruction
+      auto it = Builder.GetInsertPoint();
+      // go one back
+      it--;
+      llvm::Instruction* I = &*it;
+
+      if (I) {
+          if (sizeOfType->isStructureType()) {
+              const RecordType* sizeOfStructType = sizeOfType->getAsStructureType();
+              llvm::LLVMContext& ctx = I->getContext();
+              RecordDecl* decl = sizeOfStructType->getDecl();
+              if (!decl->getDeclName().isEmpty() || decl->getTypedefNameForAnonDecl()) {
+
+                  llvm::MDNode* N = llvm::MDNode::get(ctx, llvm::MDString::get(ctx,
+                              (decl->getTypedefNameForAnonDecl()? decl->getTypedefNameForAnonDecl()->getName().str() : decl->getNameAsString())
+                              ));
+                  I->setMetadata("sizeOfTypeName", N);
+                  llvm::MDNode* P = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, std::to_string(multiplier)));
+                  I->setMetadata("sizeOfMulFactor", P);
+              }
+          }
+      }
+  }
+
+  return ;
 }
 
 static std::string getStaticDeclName(CodeGenModule &CGM, const VarDecl &D) {

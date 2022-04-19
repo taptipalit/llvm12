@@ -568,7 +568,89 @@ public:
     if (E->getCallReturnType(CGF.getContext())->isReferenceType())
       return EmitLoadOfLValue(E);
 
-    Value *V = CGF.EmitCallExpr(E).getScalarVal();
+    const Type* sizeOfType = nullptr;
+    int multiplier = 1;
+    int argNum = -1;
+    int numArgs = E->getNumArgs();
+
+    for (int i = 0; i < numArgs; i++) {
+        const Expr* argExpr = E->getArg(i)->IgnoreCasts();
+        if (const UnaryExprOrTypeTraitExpr* uExpr =
+                dyn_cast<UnaryExprOrTypeTraitExpr>(argExpr)) {
+            if (uExpr->getKind() == UETT_SizeOf) {
+                QualType TypeToSize = uExpr->getTypeOfArgument();
+                sizeOfType = TypeToSize.getTypePtr();
+                argNum = i;
+            }
+        } else if (const BinaryOperator* BinOp = dyn_cast<BinaryOperator>(argExpr)) {
+          const Expr* LHS = BinOp->getLHS()->IgnoreCasts();
+          const Expr* RHS = BinOp->getRHS()->IgnoreCasts();
+          if (const UnaryExprOrTypeTraitExpr* uExpr =
+                  dyn_cast<UnaryExprOrTypeTraitExpr>(LHS)) {
+              if (const IntegerLiteral* RHSIL = dyn_cast<IntegerLiteral>(RHS)) {
+                  if (uExpr->getKind() == UETT_SizeOf) {
+                      QualType TypeToSize = uExpr->getTypeOfArgument();
+                      sizeOfType = TypeToSize.getTypePtr();
+                      multiplier = RHSIL->getValue().getLimitedValue();
+                      argNum = i;
+                  }
+              }
+          }
+          if (const UnaryExprOrTypeTraitExpr* uExpr =
+                  dyn_cast<UnaryExprOrTypeTraitExpr>(RHS)) {
+              if (const IntegerLiteral* LHSIL = dyn_cast<IntegerLiteral>(LHS)) {
+                  if (uExpr->getKind() == UETT_SizeOf) {
+                      QualType TypeToSize = uExpr->getTypeOfArgument();
+                      sizeOfType = TypeToSize.getTypePtr();
+                      multiplier = LHSIL->getValue().getLimitedValue();
+                      argNum = i;
+                  }
+              }
+          }
+      }
+
+    }
+
+//    Value *V = CGF.EmitCallExpr(E).getScalarVal();
+    RValue rvalue = CGF.EmitCallExpr(E);
+    Value *V = rvalue.getScalarVal();
+
+    if (sizeOfType) {
+        // Find the last inserted instruction
+        // This should be the call-inst
+        auto it = Builder.GetInsertPoint();
+        // go one back
+        it--;
+        llvm::Instruction* I = &*it;
+
+        if (I) {
+            if (llvm::CallInst* callInst = dyn_cast<llvm::CallInst>(I)) {
+                llvm::LLVMContext& ctx = callInst->getContext();
+                if (sizeOfType->isStructureType()) {
+                    const RecordType* sizeOfStructType = sizeOfType->getAsStructureType();
+                    RecordDecl* decl = sizeOfStructType->getDecl();
+                    if (!decl->getDeclName().isEmpty() || decl->getTypedefNameForAnonDecl()) {
+                        llvm::MDNode* N = llvm::MDNode::get(ctx, llvm::MDString::get(ctx,
+                                    (decl->getTypedefNameForAnonDecl()? decl->getTypedefNameForAnonDecl()->getName().str() : decl->getNameAsString())
+                                    ));
+                        callInst->setMetadata("sizeOfTypeName", N);
+                        llvm::MDNode* O = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, std::to_string(argNum)));
+                        callInst->setMetadata("sizeOfTypeArgNum", O);
+                        llvm::MDNode* P = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, std::to_string(multiplier)));
+                        callInst->setMetadata("sizeOfMulFactor", P);
+                    }
+                } else {
+                    llvm::MDNode* N = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, "scalar_type"));
+                    I->setMetadata("sizeOfTypeName", N);
+                    llvm::MDNode* O = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, std::to_string(argNum)));
+                    callInst->setMetadata("sizeOfTypeArgNum", O);
+                    llvm::MDNode* P = llvm::MDNode::get(ctx, llvm::MDString::get(ctx, std::to_string(multiplier)));
+                    callInst->setMetadata("sizeOfMulFactor", P);
+                }
+            }
+        }
+    }
+
 
     EmitLValueAlignmentAssumption(E, V);
     return V;

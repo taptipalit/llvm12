@@ -4505,7 +4505,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                      }))) {
       D.Diag(diag::warn_ignoring_fdiscard_for_bitcode);
     }
-    CmdArgs.push_back("-discard-value-names");
+    //CmdArgs.push_back("-discard-value-names");
   }
 
   // Set the main file name, so that debug info works even with

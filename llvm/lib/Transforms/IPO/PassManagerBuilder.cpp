@@ -318,7 +318,7 @@ void PassManagerBuilder::populateFunctionPassManager(
   addInitialAliasAnalysisPasses(FPM);
 
   FPM.add(createCFGSimplificationPass());
-  FPM.add(createSROAPass());
+  //FPM.add(createSROAPass());
   FPM.add(createEarlyCSEPass());
   FPM.add(createLowerExpectIntrinsicPass());
 }
@@ -536,7 +536,7 @@ void PassManagerBuilder::populateModulePassManager(
 
   // If all optimizations are disabled, just run the always-inline pass and,
   // if enabled, the function merging pass.
-  if (OptLevel == 0) {
+  //if (OptLevel == 0) {
     addPGOInstrPasses(MPM);
     if (Inliner) {
       MPM.add(Inliner);
@@ -575,7 +575,7 @@ void PassManagerBuilder::populateModulePassManager(
 
     MPM.add(createAnnotationRemarksLegacyPass());
     return;
-  }
+  //}
 
   // Add LibraryInfo if we have some.
   if (LibraryInfo)
