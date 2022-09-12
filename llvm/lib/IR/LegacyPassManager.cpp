@@ -975,7 +975,11 @@ void PMDataManager::removeDeadPasses(Pass *P, StringRef Msg,
   SmallVector<Pass *, 12> DeadPasses;
 
   // If this is a on the fly manager then it does not have TPM.
-  if (!TPM)
+  //if (!TPM)
+  // In the SVF tool, we need the LoopAnalysis results. But the consumer (SVF)
+  // isn't a pass (it's a tool). So the LoopAnalysis results will be lost if 
+  // we allow it to be freed. 
+  // We should be rearchitecting SVF instead of disabling freeing: TODO
     return;
 
   TPM->collectLastUses(DeadPasses, P);
