@@ -574,7 +574,7 @@ public:
     int numArgs = E->getNumArgs();
 
     for (int i = 0; i < numArgs; i++) {
-        const Expr* argExpr = E->getArg(i)->IgnoreCasts();
+        const Expr* argExpr = E->getArg(i)->IgnoreParenCasts();
         if (const UnaryExprOrTypeTraitExpr* uExpr =
                 dyn_cast<UnaryExprOrTypeTraitExpr>(argExpr)) {
             if (uExpr->getKind() == UETT_SizeOf) {
